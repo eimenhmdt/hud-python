@@ -477,6 +477,257 @@ async def get_filing_content_by_accession(req: FilingByAccessionRequest) -> Dict
         )
 
 
+@app.post("/analyze_8k")
+async def analyze_8k(req: FilingByAccessionRequest) -> Dict[str, Any]:
+    """Analyze an 8-K filing for specific events and items."""
+    try:
+        company = Company(req.identifier)
+        filing = None
+        for f in company.get_filings(form="8-K"):
+            if f.accession_number.replace("-", "") == req.accession_number.replace("-", ""):
+                filing = f
+                break
+
+        if filing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"8-K filing {req.accession_number} not found for {req.identifier}",
+            )
+
+        # Try to get structured 8-K object
+        analysis = {
+            "accession_number": filing.accession_number,
+            "form_type": filing.form,
+            "filing_date": filing.filing_date.isoformat()
+            if hasattr(filing.filing_date, "isoformat")
+            else str(filing.filing_date),
+            "has_structure": False,
+        }
+
+        try:
+            eightk = filing.obj()
+            analysis["has_structure"] = True
+            analysis["items"] = getattr(eightk, "items", [])
+            analysis["has_press_release"] = getattr(eightk, "has_press_release", False)
+        except Exception:
+            pass
+
+        return {"success": True, "analysis": analysis}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"analyze_8k failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"analyze_8k failed: {type(e).__name__}: {e}")
+
+
+@app.post("/get_filing_sections")
+async def get_filing_sections(req: FilingByAccessionRequest) -> Dict[str, Any]:
+    """Get specific sections from a 10-K or 10-Q filing."""
+    try:
+        company = Company(req.identifier)
+        filing = None
+        form_type = None
+
+        # Try to find filing
+        for f in company.get_filings():
+            if f.accession_number.replace("-", "") == req.accession_number.replace("-", ""):
+                filing = f
+                form_type = f.form
+                break
+
+        if filing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Filing {req.accession_number} not found for {req.identifier}",
+            )
+
+        sections = {"form_type": form_type, "has_structure": False}
+
+        try:
+            filing_obj = filing.obj()
+            sections["has_structure"] = True
+
+            # Extract sections based on form type
+            if form_type in ["10-K", "10-Q"]:
+                if hasattr(filing_obj, "business"):
+                    sections["business"] = str(filing_obj.business)[:5000]
+                if hasattr(filing_obj, "risk_factors"):
+                    sections["risk_factors"] = str(filing_obj.risk_factors)[:5000]
+                if hasattr(filing_obj, "mda"):
+                    sections["mda"] = str(filing_obj.mda)[:5000]
+                if hasattr(filing_obj, "financials"):
+                    sections["has_financials"] = True
+        except Exception as e:
+            logger.warning(f"Could not get structured sections: {e}")
+
+        return {"success": True, "sections": sections}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_filing_sections failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500, detail=f"get_filing_sections failed: {type(e).__name__}: {e}"
+        )
+
+
+@app.post("/get_financials")
+async def get_financials(req: FilingByAccessionRequest) -> Dict[str, Any]:
+    """Extract financial statements and key metrics from a 10-K or 10-Q filing."""
+    try:
+        company = Company(req.identifier)
+        filing = None
+
+        # Try to find filing
+        for f in company.get_filings():
+            if f.accession_number.replace("-", "") == req.accession_number.replace("-", ""):
+                filing = f
+                break
+
+        if filing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Filing {req.accession_number} not found for {req.identifier}",
+            )
+
+        result = {
+            "accession_number": filing.accession_number,
+            "form_type": filing.form,
+            "filing_date": filing.filing_date.isoformat()
+            if hasattr(filing.filing_date, "isoformat")
+            else str(filing.filing_date),
+            "has_financials": False,
+            "financial_data": None,
+        }
+
+        try:
+            # Import Financials from edgar
+            from edgar.financials import Financials
+
+            # Extract financials using Financials.extract
+            financials = Financials.extract(filing)
+
+            if financials:
+                result["has_financials"] = True
+                result["cik"] = str(company.cik)
+                result["name"] = company.name
+                financial_data = {}
+
+                # Extract income statement
+                try:
+                    income = financials.income_statement()
+                    if income is not None:
+                        financial_data["income_statement"] = {
+                            "data": income.to_dict(orient="index")
+                            if hasattr(income, "to_dict")
+                            else str(income)[:5000],
+                            "columns": list(income.columns) if hasattr(income, "columns") else None,
+                        }
+                except Exception as e:
+                    logger.warning(f"Could not extract income statement: {e}")
+
+                # Extract balance sheet
+                try:
+                    balance = financials.balance_sheet()
+                    if balance is not None:
+                        financial_data["balance_sheet"] = {
+                            "data": balance.to_dict(orient="index")
+                            if hasattr(balance, "to_dict")
+                            else str(balance)[:5000],
+                            "columns": list(balance.columns)
+                            if hasattr(balance, "columns")
+                            else None,
+                        }
+                except Exception as e:
+                    logger.warning(f"Could not extract balance sheet: {e}")
+
+                # Extract cash flow
+                try:
+                    cashflow = financials.cashflow_statement()
+                    if cashflow is not None:
+                        financial_data["cash_flow"] = {
+                            "data": cashflow.to_dict(orient="index")
+                            if hasattr(cashflow, "to_dict")
+                            else str(cashflow)[:5000],
+                            "columns": list(cashflow.columns)
+                            if hasattr(cashflow, "columns")
+                            else None,
+                        }
+                except Exception as e:
+                    logger.warning(f"Could not extract cash flow: {e}")
+
+                result["financial_data"] = financial_data
+        except Exception as e:
+            logger.warning(f"Could not extract financials: {e}")
+
+        return {"success": True, **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_financials failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500, detail=f"get_financials failed: {type(e).__name__}: {e}"
+        )
+
+
+@app.post("/get_segment_data")
+async def get_segment_data(req: FilingByAccessionRequest) -> Dict[str, Any]:
+    """Extract segment-level financial data from a 10-K or 10-Q filing."""
+    try:
+        company = Company(req.identifier)
+        filing = None
+
+        # Try to find filing
+        for f in company.get_filings():
+            if f.accession_number.replace("-", "") == req.accession_number.replace("-", ""):
+                filing = f
+                break
+
+        if filing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Filing {req.accession_number} not found for {req.identifier}",
+            )
+
+        result = {
+            "success": True,
+            "accession_number": filing.accession_number,
+            "form_type": filing.form,
+            "filing_date": filing.filing_date.isoformat()
+            if hasattr(filing.filing_date, "isoformat")
+            else str(filing.filing_date),
+            "cik": str(company.cik),
+            "name": company.name,
+            "has_segment_data": False,
+            "segment_data": None,
+        }
+
+        try:
+            filing_obj = filing.obj()
+
+            # Try to extract segment data
+            if hasattr(filing_obj, "segments"):
+                result["has_segment_data"] = True
+                result["segment_data"] = str(filing_obj.segments)[:10000]
+            elif hasattr(filing_obj, "notes") and hasattr(filing_obj.notes, "segments"):
+                result["has_segment_data"] = True
+                result["segment_data"] = str(filing_obj.notes.segments)[:10000]
+        except Exception as e:
+            logger.warning(f"Could not extract segment data: {e}")
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_segment_data failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500, detail=f"get_segment_data failed: {type(e).__name__}: {e}"
+        )
+
+
 @app.post("/answer")
 async def answer(req: AnswerRequest) -> Dict[str, Any]:
     state.submitted_answer = req.final_answer
@@ -493,14 +744,26 @@ async def evaluate(req: EvaluateRequest) -> Dict[str, Any]:
             "done": False,
         }
 
-    rubric = Rubric.from_dict(req.rubric)
+    logger.info(f"Evaluating answer (length: {len(submitted)} chars)")
+    logger.info(f"Answer preview: {submitted}")
 
-    evaluation = await rubric.grade(submitted)
+    try:
+        rubric = Rubric.from_dict(req.rubric)
+        evaluation = await rubric.grade(submitted)
+        reward = evaluation.score
+        info = {"report": [r.model_dump() for r in evaluation.report] if evaluation.report else []}
 
-    reward = evaluation.score
-    info = {"report": [r.model_dump() for r in evaluation.report] if evaluation.report else []}
-
-    return {"reward": reward, "info": info, "done": True}
+        logger.info(f"Rubric evaluation completed. Score: {reward}")
+        logger.info(f"Evaluation report: {info}")
+        return {"reward": reward, "info": info, "done": True}
+    except Exception as e:
+        logger.error(f"Rubric evaluation failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
+        return {
+            "reward": 0.0,
+            "content": f"Evaluation failed: {type(e).__name__}: {e}",
+            "done": True,
+        }
 
 
 if __name__ == "__main__":

@@ -131,6 +131,58 @@ async def get_filing_content_by_accession(identifier: str, accession_number: str
 
 
 @mcp.tool()
+async def analyze_8k(identifier: str, accession_number: str) -> Any:
+    """Analyze an 8-K filing for specific events and items."""
+    resp = await http_client.post(
+        "/analyze_8k",
+        json={
+            "identifier": identifier,
+            "accession_number": accession_number,
+        },
+    )
+    return resp.json()
+
+
+@mcp.tool()
+async def get_filing_sections(identifier: str, accession_number: str) -> Any:
+    """Get specific sections from a 10-K or 10-Q filing (business, MD&A, financials, etc)."""
+    resp = await http_client.post(
+        "/get_filing_sections",
+        json={
+            "identifier": identifier,
+            "accession_number": accession_number,
+        },
+    )
+    return resp.json()
+
+
+@mcp.tool()
+async def get_financials(identifier: str, accession_number: str) -> Any:
+    """Extract financial statements (balance sheet, income statement, cash flow) from a 10-K or 10-Q filing."""
+    resp = await http_client.post(
+        "/get_financials",
+        json={
+            "identifier": identifier,
+            "accession_number": accession_number,
+        },
+    )
+    return resp.json()
+
+
+@mcp.tool()
+async def get_segment_data(identifier: str, accession_number: str) -> Any:
+    """Extract segment-level financial data from a 10-K or 10-Q filing."""
+    resp = await http_client.post(
+        "/get_segment_data",
+        json={
+            "identifier": identifier,
+            "accession_number": accession_number,
+        },
+    )
+    return resp.json()
+
+
+@mcp.tool()
 async def answer(final_answer: str) -> str:
     """
     Submit the final research answer.
@@ -156,8 +208,15 @@ async def evaluate(rubric: list[dict[str, str | float]]) -> EvaluationResult:
     Returns:
         Evaluation result with reward score and detailed report
     """
-    resp = await http_client.post("/evaluate", json={"rubric": rubric})
-    return EvaluationResult(**resp.json())
+    try:
+        resp = await http_client.post("/evaluate", json={"rubric": rubric})
+        resp.raise_for_status()
+        return EvaluationResult(**resp.json())
+    except Exception as e:
+        logging.error(f"Evaluation tool error: {e}")
+        return EvaluationResult(
+            reward=0.0, done=True, content=f"Evaluation error: {e}", isError=True
+        )
 
 
 if __name__ == "__main__":
