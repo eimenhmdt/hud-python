@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import socket
+import traceback
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 from urllib.parse import urlparse
 
@@ -132,8 +133,11 @@ app = FastAPI(title="SEC EDGAR Environment API", version="0.1.0")
 
 # Set SEC EDGAR identity (required by SEC regulations)
 # Prefer EDGAR_IDENTITY per edgar docs; fallback to SEC_EDGAR_USER_AGENT for compatibility
+# Format: "Your Name your.email@domain.com"
 _identity = (
-    os.getenv("EDGAR_IDENTITY") or os.getenv("SEC_EDGAR_USER_AGENT") or "hud-rubrics@example.com"
+    os.getenv("EDGAR_IDENTITY")
+    or os.getenv("SEC_EDGAR_USER_AGENT")
+    or "HUD Rubrics Environment hud-rubrics@example.com"
 )
 set_identity(_identity)
 logger.info(f"SEC EDGAR identity set to: {_identity}")
@@ -168,12 +172,15 @@ async def search_company(req: SearchCompanyRequest) -> List[Dict[str, str]]:
         # Use edgartools to search for company
         company = Company(req.query)
 
+        # edgartools Company has tickers (plural) not ticker
+        ticker = company.tickers[0] if company.tickers else ""
+
         results = [
             {
-                "ticker": company.ticker,
+                "ticker": ticker,
                 "name": company.name,
-                "cik": company.cik,
-                "message": f"Found company: {company.name} ({company.ticker})",
+                "cik": str(company.cik),
+                "message": f"Found company: {company.name} ({ticker})",
             }
         ]
 
@@ -182,6 +189,7 @@ async def search_company(req: SearchCompanyRequest) -> List[Dict[str, str]]:
 
     except Exception as e:
         logger.error(f"Company search failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
         raise HTTPException(
             status_code=500, detail=f"Company search failed: {type(e).__name__}: {e}"
         )
@@ -193,22 +201,23 @@ async def get_filings(req: GetFilingsRequest) -> List[Dict[str, Any]]:
     try:
         company = Company(req.ticker)
 
-        # Get filings
+        # Get filings (no limit parameter, apply limit after fetching)
         if req.form_type:
-            filings = company.get_filings(form=req.form_type, limit=req.limit)
+            filings = company.get_filings(form=req.form_type)
         else:
-            filings = company.get_filings(limit=req.limit)
+            filings = company.get_filings()
 
         results = []
-        for filing in filings:
+        # Apply limit after fetching
+        for filing in list(filings)[: req.limit]:
             results.append(
                 {
                     "filing_date": filing.filing_date.strftime("%Y-%m-%d")
                     if filing.filing_date
                     else "",
                     "form_type": filing.form,
-                    "description": filing.description,
-                    "filing_url": filing.url,
+                    "description": filing.primary_doc_description or "",
+                    "filing_url": filing.filing_url,
                     "accession_number": filing.accession_number,
                 }
             )
@@ -218,6 +227,7 @@ async def get_filings(req: GetFilingsRequest) -> List[Dict[str, Any]]:
 
     except Exception as e:
         logger.error(f"Get filings failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Get filings failed: {type(e).__name__}: {e}")
 
 
