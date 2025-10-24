@@ -11,7 +11,7 @@ See [docs](https://docs.hud.so/build-environments) for the complete environment 
 - Implements exponential backoff for rate limiting
 
 **`server/`** - Wraps data in MCP tools
-- Provides `search_company()`, `get_filings()`, `get_filing_content()`, `answer()`, `evaluate()` tools for agents
+- Provides `search_company()`, `get_filings()`, `get_recent_filings()`, `get_filing_content()`, `get_filing_content_by_accession()`, `answer()`, `evaluate()` tools for agents
 - Agents and tasks interact only with these tools
 
 **Why separate?** Edit tools for the agent or tasks without restarting the environment backend.
@@ -20,7 +20,9 @@ See [docs](https://docs.hud.so/build-environments) for the complete environment 
 
 - **`search_company(query: str)`** - Search for a company by ticker symbol or name. Returns company information including ticker, name, and CIK.
 - **`get_filings(ticker: str, form_type: Optional[str], limit: int)`** - Get recent SEC filings for a company. Can filter by form type (e.g., "10-K", "10-Q", "8-K") and limit the number of results.
+- **`get_recent_filings(identifier?: str, form_type?: str, limit?: int)`** - Global feed or company-specific recent filings. `identifier` can be ticker or CIK. If omitted, returns global recent.
 - **`get_filing_content(filing_url: str)`** - Fetch the full text content of a specific SEC filing from its URL.
+- **`get_filing_content_by_accession(identifier: str, accession_number: str)`** - Fetch filing content precisely using ticker/CIK and accession number (avoids URL parsing issues).
 - **`answer(final_answer: str)`** - Submit the final research answer.
 - **`evaluate(rubric: list[dict])`** - Evaluate submitted answer using a structured rubric with weighted requirements.
 

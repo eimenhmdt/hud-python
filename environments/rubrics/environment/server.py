@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 import uvicorn
-from edgar import Company, Filing, set_identity
+from edgar import Company, Filing, set_identity, get_filings as edgar_get_filings
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from rubric import Rubric
@@ -128,6 +128,18 @@ class EvaluateRequest(BaseModel):
     rubric: list[dict[str, str | float]]
 
 
+class RecentFilingsRequest(BaseModel):
+    identifier: str | None = None  # ticker or CIK; if None, global recent
+    form_type: str | None = None
+    limit: int = 50
+    days: int | None = None  # reserved, not used directly
+
+
+class FilingByAccessionRequest(BaseModel):
+    identifier: str  # ticker or CIK
+    accession_number: str
+
+
 app = FastAPI(title="SEC EDGAR Environment API", version="0.1.0")
 
 
@@ -237,8 +249,6 @@ async def get_filing_content(req: GetFilingContentRequest) -> Dict[str, str]:
     try:
         # Parse the filing URL to extract accession number
         # URL format: https://www.sec.gov/Archives/edgar/data/{CIK}/{ACCESSION_NO_DASHES}/{filename}
-        # The accession in URL has no dashes: 000110465925042659
-        # But Filing() expects it with dashes: 0001104659-25-042659
         parsed = urlparse(req.filing_url)
         path_parts = parsed.path.split("/")
 
@@ -337,6 +347,133 @@ async def get_filing_content(req: GetFilingContentRequest) -> Dict[str, str]:
         logger.error(f"Get filing content failed: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=500, detail=f"Get filing content failed: {type(e).__name__}: {e}"
+        )
+
+
+@app.post("/get_recent_filings")
+async def get_recent_filings(req: RecentFilingsRequest) -> List[Dict[str, Any]]:
+    """Get recent filings for a company (by ticker/CIK) or globally.
+
+    Args:
+        identifier: Optional ticker or CIK. If omitted, returns global recent filings
+        form_type: Optional form filter (e.g., "10-K", "8-K", ["3","4","5"])
+        limit: Max number of results
+    """
+    try:
+        results: list[dict[str, Any]] = []
+
+        if req.identifier:
+            company = Company(req.identifier)
+            filings = (
+                company.get_filings(form=req.form_type) if req.form_type else company.get_filings()
+            )
+        else:
+            # Global feed via edgar.get_filings
+            filings = edgar_get_filings(form=req.form_type, count=req.limit)
+
+        for i, filing in enumerate(filings):
+            if i >= req.limit:
+                break
+            results.append(
+                {
+                    "filing_date": filing.filing_date.strftime("%Y-%m-%d")
+                    if filing.filing_date
+                    else "",
+                    "form_type": filing.form,
+                    "company": getattr(filing, "company", None),
+                    "cik": getattr(filing, "cik", None),
+                    "file_number": getattr(filing, "file_number", None),
+                    "acceptance_datetime": getattr(filing, "acceptance_datetime", None),
+                    "period_of_report": getattr(filing, "period_of_report", None),
+                    "filing_url": getattr(filing, "filing_url", getattr(filing, "url", None)),
+                    "accession_number": filing.accession_number,
+                    "description": getattr(filing, "primary_doc_description", ""),
+                }
+            )
+
+        return results
+    except Exception as e:
+        logger.error(f"get_recent_filings failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500, detail=f"get_recent_filings failed: {type(e).__name__}: {e}"
+        )
+
+
+@app.post("/get_filing_content_by_accession")
+async def get_filing_content_by_accession(req: FilingByAccessionRequest) -> Dict[str, Any]:
+    """Get filing content and structured info via identifier + accession."""
+    try:
+        company = Company(req.identifier)
+
+        filing = None
+        clean_req = req.accession_number.replace("-", "")
+        for f in company.get_filings():
+            if getattr(f, "accession_number", "").replace("-", "") == clean_req:
+                filing = f
+                break
+
+        if filing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Filing {req.accession_number} not found for {req.identifier}",
+            )
+
+        # Content
+        content = ""
+        try:
+            content = filing.text()
+        except Exception:
+            try:
+                content = filing.text
+            except Exception:
+                content = ""
+
+        if not content:
+            try:
+                content = filing.html()
+            except Exception:
+                try:
+                    content = filing.html
+                except Exception:
+                    content = ""
+
+        # Truncate
+        max_length = 50000
+        if len(content) > max_length:
+            content = content[:max_length] + "\n\n...[truncated]"
+
+        # Optional: minimal structured hints
+        filing_data: dict[str, Any] = {}
+        try:
+            obj = filing.obj()
+            if obj:
+                if filing.form == "8-K" and hasattr(obj, "items"):
+                    filing_data["items"] = getattr(obj, "items", [])
+                    filing_data["has_press_release"] = getattr(obj, "has_press_release", False)
+                elif filing.form in ["10-K", "10-Q"]:
+                    filing_data["has_financials"] = True
+        except Exception:
+            pass
+
+        return {
+            "accession_number": filing.accession_number,
+            "form_type": filing.form,
+            "filing_date": filing.filing_date.isoformat()
+            if hasattr(filing.filing_date, "isoformat")
+            else str(filing.filing_date),
+            "content": content,
+            "url": getattr(filing, "url", getattr(filing, "filing_url", None)),
+            "filing_data": filing_data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_filing_content_by_accession failed: {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"get_filing_content_by_accession failed: {type(e).__name__}: {e}",
         )
 
 

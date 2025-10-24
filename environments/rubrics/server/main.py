@@ -102,6 +102,35 @@ async def get_filing_content(filing_url: str) -> str:
 
 
 @mcp.tool()
+async def get_recent_filings(
+    identifier: Optional[str] = None, form_type: Optional[str] = None, limit: int = 50
+) -> Any:
+    """Get recent filings (company-specific when identifier provided, else global)."""
+    resp = await http_client.post(
+        "/get_recent_filings",
+        json={
+            "identifier": identifier,
+            "form_type": form_type,
+            "limit": limit,
+        },
+    )
+    return resp.json()
+
+
+@mcp.tool()
+async def get_filing_content_by_accession(identifier: str, accession_number: str) -> Any:
+    """Get filing content using identifier (ticker/CIK) and accession number."""
+    resp = await http_client.post(
+        "/get_filing_content_by_accession",
+        json={
+            "identifier": identifier,
+            "accession_number": accession_number,
+        },
+    )
+    return resp.json()
+
+
+@mcp.tool()
 async def answer(final_answer: str) -> str:
     """
     Submit the final research answer.
