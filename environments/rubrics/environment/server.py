@@ -1,7 +1,6 @@
 """
-FastAPI server for Rubrics environment.
-Holds EXA API key on the server side and exposes simple HTTP endpoints
-that the controller calls. Mirrors the browser/blank environment pattern.
+FastAPI server for Rubrics environment with SEC EDGAR integration.
+Manages SEC filing data access and state.
 """
 
 import asyncio
@@ -9,8 +8,12 @@ import logging
 import os
 import socket
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
+from urllib.parse import urlparse
 
 import httpx
+import uvicorn
+from edgartools import Company, set_identity
+from edgartools.filing import Filing
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from rubric import Rubric
@@ -103,12 +106,18 @@ class _EnvState:
 state = _EnvState()
 
 
-class SearchRequest(BaseModel):
+class SearchCompanyRequest(BaseModel):
     query: str
 
 
-class FetchRequest(BaseModel):
-    url: str
+class GetFilingsRequest(BaseModel):
+    ticker: str
+    form_type: Optional[str] = None
+    limit: int = 10
+
+
+class GetFilingContentRequest(BaseModel):
+    filing_url: str
 
 
 class AnswerRequest(BaseModel):
@@ -119,7 +128,13 @@ class EvaluateRequest(BaseModel):
     rubric: list[dict[str, str | float]]
 
 
-app = FastAPI(title="DeepResearch Environment API", version="0.1.0")
+app = FastAPI(title="SEC EDGAR Environment API", version="0.1.0")
+
+
+# Set SEC EDGAR identity (required by SEC regulations)
+SEC_EDGAR_USER_AGENT = os.getenv("SEC_EDGAR_USER_AGENT", "hud-rubrics@example.com")
+set_identity(SEC_EDGAR_USER_AGENT)
+logger.info(f"SEC EDGAR identity set to: {SEC_EDGAR_USER_AGENT}")
 
 
 @app.get("/health")
@@ -144,158 +159,107 @@ async def setup() -> Dict[str, Any]:
     return {"ok": True}
 
 
-async def _execute_search(query: str, exa_api_key: str, max_results: int = 1) -> Dict[str, Any]:
-    """Execute the actual Exa search API call."""
-    search_url = "https://api.exa.ai/search"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            search_url,
-            headers={"x-api-key": exa_api_key, "Content-Type": "application/json"},
-            json={
-                "query": query,
-                "numResults": max_results,
-                "type": "keyword",
-                "userLocation": "us",
-                "contents": {"text": {"maxCharacters": 1000}},
-            },
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-@app.post("/search")
-async def search(req: SearchRequest) -> List[Dict[str, str]]:
-    results: List[Dict[str, str]] = []
-    max_results: int = 1
-
-    exa_api_key: Optional[str] = os.getenv("EXA_API_KEY")
-    if not exa_api_key:
-        raise HTTPException(status_code=400, detail="EXA_API_KEY not set on environment")
-
+@app.post("/search_company")
+async def search_company(req: SearchCompanyRequest) -> List[Dict[str, str]]:
+    """Search for a company by ticker or name."""
     try:
-        # Use exponential backoff for the API call
-        data = await call_with_exponential_backoff(
-            _execute_search,
-            req.query,
-            exa_api_key,
-            max_results,
+        # Use edgartools to search for company
+        company = Company(req.query)
+
+        results = [
+            {
+                "ticker": company.ticker,
+                "name": company.name,
+                "cik": company.cik,
+                "message": f"Found company: {company.name} ({company.ticker})",
+            }
+        ]
+
+        state.search_count += 1
+        return results
+
+    except Exception as e:
+        logger.error(f"Company search failed: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Company search failed: {type(e).__name__}: {e}"
         )
 
-        for item in data.get("results", []):
-            title = item.get("title", "")
-            url = item.get("url", "")
-            if title and url:
-                results.append({"title": title, "url": url})
 
-        if not results:
-            autoprompt = data.get("autopromptString", req.query)
-            return [
-                {
-                    "message": "No results found",
-                    "query": req.query,
-                    "autopromptString": autoprompt,
-                }
-            ]
-
-    except (
-        httpx.HTTPStatusError
-    ) as e:  # pragma: no cover - network errors are environment dependent
-        status_code = e.response.status_code
-        if status_code == 401:
-            raise HTTPException(status_code=401, detail="Invalid EXA_API_KEY")
-        if status_code == 429:
-            # This should be handled by exponential backoff, but if all retries fail
-            raise HTTPException(status_code=429, detail="Exa API rate limit exceeded after retries")
-        raise HTTPException(status_code=502, detail=f"Exa API error: {status_code}")
-    except Exception as e:  # pragma: no cover
-        raise HTTPException(status_code=500, detail=f"Search failed: {type(e).__name__}: {e}")
-
-    state.search_count += 1
-    return results
-
-
-async def _execute_fetch(url: str, exa_api_key: str, max_length: int = 2500) -> Dict[str, Any]:
-    """Execute the actual Exa contents API call."""
-    contents_url = "https://api.exa.ai/contents"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            contents_url,
-            headers={"x-api-key": exa_api_key, "Content-Type": "application/json"},
-            json={
-                "urls": [url],
-                "text": {"maxCharacters": max_length, "includeHtmlTags": False},
-                "highlights": {"numSentences": 5, "highlightsPerUrl": 3},
-                "summary": {"query": "main takeaways"},
-                "livecrawl": "fallback",
-            },
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-@app.post("/fetch")
-async def fetch(req: FetchRequest) -> Dict[str, str]:
-    from urllib.parse import urlparse
-
-    max_length: int = 2500
-    parsed = urlparse(req.url)
-    if not parsed.scheme or not parsed.netloc:
-        raise HTTPException(status_code=400, detail=f"Invalid URL: {req.url}")
-
-    exa_api_key: Optional[str] = os.getenv("EXA_API_KEY")
-    if not exa_api_key:
-        raise HTTPException(status_code=400, detail="EXA_API_KEY not set on environment")
-
+@app.post("/get_filings")
+async def get_filings(req: GetFilingsRequest) -> List[Dict[str, Any]]:
+    """Get recent filings for a company."""
     try:
-        # Use exponential backoff for the API call
-        data = await call_with_exponential_backoff(
-            _execute_fetch,
-            req.url,
-            exa_api_key,
-            max_length,
-        )
+        company = Company(req.ticker)
 
-        results = data.get("results", [])
-        if results:
-            result = results[0]
-            text = result.get("text", "")
-            summary = result.get("summary", "")
-            highlights = result.get("highlights", [])
-
-            parts: List[str] = []
-            if summary:
-                parts.append("=== SUMMARY (Main Takeaways) ===")
-                parts.append(summary)
-                parts.append("")
-            if highlights:
-                parts.append("=== KEY HIGHLIGHTS ===")
-                for idx, hl in enumerate(highlights[:3], 1):
-                    parts.append(f"\nHighlight {idx}:")
-                    parts.append(str(hl))
-                parts.append("")
-            if text:
-                parts.append("=== FULL CONTENT ===")
-                if len(text) > max_length:
-                    text = text[:max_length] + "...[truncated]"
-                parts.append(text)
-
-            content = "\n".join(parts) if parts else "No content available"
+        # Get filings
+        if req.form_type:
+            filings = company.get_filings(form=req.form_type, limit=req.limit)
         else:
-            content = "No content available for this URL"
+            filings = company.get_filings(limit=req.limit)
 
-    except httpx.HTTPStatusError as e:  # pragma: no cover
-        status_code = e.response.status_code
-        if status_code == 401:
-            raise HTTPException(status_code=401, detail="Invalid EXA_API_KEY")
-        if status_code == 429:
-            # This should be handled by exponential backoff, but if all retries fail
-            raise HTTPException(status_code=429, detail="Exa API rate limit exceeded after retries")
-        raise HTTPException(status_code=502, detail=f"Exa API error: {status_code}")
-    except Exception as e:  # pragma: no cover
-        raise HTTPException(status_code=500, detail=f"Fetch failed: {type(e).__name__}: {e}")
+        results = []
+        for filing in filings:
+            results.append(
+                {
+                    "filing_date": filing.filing_date.strftime("%Y-%m-%d")
+                    if filing.filing_date
+                    else "",
+                    "form_type": filing.form,
+                    "description": filing.description,
+                    "filing_url": filing.url,
+                    "accession_number": filing.accession_number,
+                }
+            )
 
-    state.fetch_count += 1
-    return {"content": content}
+        state.search_count += 1
+        return results
+
+    except Exception as e:
+        logger.error(f"Get filings failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Get filings failed: {type(e).__name__}: {e}")
+
+
+@app.post("/get_filing_content")
+async def get_filing_content(req: GetFilingContentRequest) -> Dict[str, str]:
+    """Get the content of a specific filing."""
+    try:
+        # Parse the filing URL to extract accession number
+        parsed = urlparse(req.filing_url)
+        path_parts = parsed.path.split("/")
+
+        # Find the accession number in the URL
+        accession = None
+        for part in path_parts:
+            if len(part) > 10 and "-" in part:
+                accession = part.replace("-", "")
+                break
+
+        if not accession:
+            raise HTTPException(
+                status_code=400, detail="Could not extract accession number from URL"
+            )
+
+        # Get filing from edgartools
+        filing = Filing(accession)
+
+        # Get the HTML content
+        content = filing.text
+
+        # Truncate if too long
+        max_length = 50000
+        if len(content) > max_length:
+            content = content[:max_length] + "\n\n...[truncated]"
+
+        state.fetch_count += 1
+        return {"content": content}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get filing content failed: {type(e).__name__}: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Get filing content failed: {type(e).__name__}: {e}"
+        )
 
 
 @app.post("/answer")
@@ -325,14 +289,9 @@ async def evaluate(req: EvaluateRequest) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    import uvicorn
-
     # Configure logging
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-
-    if not os.getenv("EXA_API_KEY"):
-        raise ValueError("EXA_API_KEY is not set")
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
