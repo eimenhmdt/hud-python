@@ -12,8 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 import uvicorn
-from edgar import Company, set_identity
-from edgar.filing import Filing
+from edgar import Company, Filing, set_identity
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from rubric import Rubric
@@ -132,9 +131,12 @@ app = FastAPI(title="SEC EDGAR Environment API", version="0.1.0")
 
 
 # Set SEC EDGAR identity (required by SEC regulations)
-SEC_EDGAR_USER_AGENT = os.getenv("SEC_EDGAR_USER_AGENT", "hud-rubrics@example.com")
-set_identity(SEC_EDGAR_USER_AGENT)
-logger.info(f"SEC EDGAR identity set to: {SEC_EDGAR_USER_AGENT}")
+# Prefer EDGAR_IDENTITY per edgar docs; fallback to SEC_EDGAR_USER_AGENT for compatibility
+_identity = (
+    os.getenv("EDGAR_IDENTITY") or os.getenv("SEC_EDGAR_USER_AGENT") or "hud-rubrics@example.com"
+)
+set_identity(_identity)
+logger.info(f"SEC EDGAR identity set to: {_identity}")
 
 
 @app.get("/health")
