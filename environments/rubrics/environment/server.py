@@ -12,8 +12,8 @@ from urllib.parse import urlparse
 
 import httpx
 import uvicorn
-from edgartools import Company, set_identity
-from edgartools.filing import Filing
+from edgar import Company, set_identity
+from edgar.filing import Filing
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from rubric import Rubric
