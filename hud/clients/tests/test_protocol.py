@@ -35,8 +35,8 @@ class MockClient(BaseHUDClient):
             raise RuntimeError("Not connected")
         return self._mock_tools
 
-    async def list_resources(self) -> list[types.Resource]:
-        """Minimal list_resources for protocol satisfaction in tests."""
+    async def _list_resources_impl(self) -> list[types.Resource]:
+        """Minimal resource listing implementation for tests."""
         return []
 
     async def _call_tool(self, tool_call: MCPToolCall) -> MCPToolResult:

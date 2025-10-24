@@ -143,8 +143,8 @@ class FastMCPHUDClient(BaseHUDClient):
             structuredContent=result.structured_content,
         )
 
-    async def list_resources(self) -> list[types.Resource]:
-        """List all available resources."""
+    async def _list_resources_impl(self) -> list[types.Resource]:
+        """Implementation of resource listing for FastMCP client."""
         if self._client is None:
             raise ValueError("Client is not connected, call initialize() first")
         return await self._client.list_resources()

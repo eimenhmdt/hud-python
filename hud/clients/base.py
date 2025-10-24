@@ -104,6 +104,7 @@ class BaseHUDClient(AgentMCPClient):
 
         self._initialized = False
         self._telemetry_data = {}  # Initialize telemetry data
+        self._cached_resources: list[types.Resource] = []  # Cache for resources
 
         if self.verbose:
             self._setup_verbose_logging()
@@ -170,6 +171,7 @@ class BaseHUDClient(AgentMCPClient):
         if self._initialized:
             await self._disconnect()
             self._initialized = False
+            self._cached_resources.clear()
             hud_console.info("Environment Shutdown completed")
         else:
             hud_console.debug("Client was not initialized, skipping disconnect")
@@ -211,9 +213,21 @@ class BaseHUDClient(AgentMCPClient):
         """List all available tools."""
         raise NotImplementedError
 
-    @abstractmethod
     async def list_resources(self) -> list[types.Resource]:
-        """List all available resources."""
+        """List all available resources with optional caching.
+
+        Args:
+            use_cache: If True, use cached resources if available. Default is False.
+
+        Returns:
+            List of available resources.
+        """
+        self._cached_resources = await self._list_resources_impl()
+        return self._cached_resources
+
+    @abstractmethod
+    async def _list_resources_impl(self) -> list[types.Resource]:
+        """Implementation-specific resource listing. Subclasses must implement this."""
         raise NotImplementedError
 
     @abstractmethod
@@ -270,6 +284,15 @@ class BaseHUDClient(AgentMCPClient):
     async def _fetch_telemetry(self) -> None:
         """Common telemetry fetching for all hud clients."""
         try:
+            telemetry_available = any(
+                resource.uri == "telemetry://live" for resource in self._cached_resources
+            )
+
+            if not telemetry_available:
+                if self.verbose:
+                    hud_console.debug("Telemetry resource not available from server")
+                return
+
             # Try to read telemetry resource directly
             result = await self.read_resource("telemetry://live")
             if result and result.contents:
