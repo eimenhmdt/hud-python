@@ -236,26 +236,92 @@ async def get_filing_content(req: GetFilingContentRequest) -> Dict[str, str]:
     """Get the content of a specific filing."""
     try:
         # Parse the filing URL to extract accession number
+        # URL format: https://www.sec.gov/Archives/edgar/data/{CIK}/{ACCESSION_NO_DASHES}/{filename}
+        # The accession in URL has no dashes: 000110465925042659
+        # But Filing() expects it with dashes: 0001104659-25-042659
         parsed = urlparse(req.filing_url)
         path_parts = parsed.path.split("/")
 
-        # Find the accession number in the URL
-        accession = None
+        # Find the accession number without dashes
+        accession_no_dashes = None
         for part in path_parts:
-            if len(part) > 10 and "-" in part:
-                accession = part.replace("-", "")
+            if len(part) >= 18 and part.isdigit():  # Accession numbers are 18 digits
+                accession_no_dashes = part
                 break
 
-        if not accession:
+        if not accession_no_dashes:
             raise HTTPException(
-                status_code=400, detail="Could not extract accession number from URL"
+                status_code=400,
+                detail=f"Could not extract accession number from URL: {req.filing_url}",
             )
 
-        # Get filing from edgartools
-        filing = Filing(accession)
+        # Convert to accession format with dashes: 0001104659-25-042659
+        accession = (
+            f"{accession_no_dashes[:10]}-{accession_no_dashes[10:12]}-{accession_no_dashes[12:]}"
+        )
 
-        # Get the HTML content
-        content = filing.text
+        # Prefer locating via Company to satisfy Filing ctor requirements
+        filing = None
+        try:
+            # Try to infer CIK from the URL path (segment after 'data')
+            cik = None
+            parts = [p for p in path_parts if p]
+            if "data" in parts:
+                idx = parts.index("data")
+                if idx + 1 < len(parts) and parts[idx + 1].isdigit():
+                    cik = parts[idx + 1]
+
+            if cik:
+                comp = Company(cik)
+                for f in comp.get_filings():
+                    if getattr(f, "accession_number", "").replace("-", "") == accession_no_dashes:
+                        filing = f
+                        break
+        except Exception:
+            filing = None
+
+        # Fallback: try direct Filing by accession for versions that support it
+        if filing is None:
+            try:
+                filing = Filing(accession)
+            except TypeError:
+                filing = None
+
+        if filing is None:
+            raise HTTPException(
+                status_code=404, detail=f"Filing not found for accession {accession}"
+            )
+
+        # Get the filing content with fallbacks
+        content = ""
+        try:
+            # Prefer full text submission
+            content = filing.text()
+        except Exception:
+            try:
+                content = filing.text  # property in some versions
+            except Exception:
+                content = ""
+
+        # Fallback to HTML
+        if not content:
+            try:
+                content = filing.html()
+            except Exception:
+                try:
+                    content = filing.html  # property fallback
+                except Exception:
+                    content = ""
+
+        # Final fallback: fetch the URL directly
+        if not content:
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(req.filing_url, headers={"User-Agent": _identity})
+                    resp.raise_for_status()
+                    content = resp.text
+            except Exception:
+                content = ""
 
         # Truncate if too long
         max_length = 50000
