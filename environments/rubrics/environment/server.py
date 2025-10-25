@@ -322,7 +322,9 @@ async def get_filing_content(req: GetFilingContentRequest) -> Dict[str, str]:
         if not content:
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.get(req.filing_url, headers={"User-Agent": _identity})
+                    resp = await client.get(
+                        req.filing_url, headers={"User-Agent": os.environ["EDGAR_IDENTITY"]}
+                    )
                     resp.raise_for_status()
                     content = resp.text
             except Exception:
