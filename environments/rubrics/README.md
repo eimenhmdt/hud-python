@@ -32,10 +32,6 @@ The `evaluate` tool uses The LLM Data Company's [rubric](https://github.com/The-
 
 ## Setup
 
-### Requirements
-- No API keys required! The environment uses public SEC EDGAR data through the edgartools library.
-- **Important**: You must provide your identity (email) as required by SEC regulations.
-
 ### Environment Variables
 
 The environment requires several API keys and configuration:
