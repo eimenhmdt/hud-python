@@ -212,8 +212,9 @@ async def get_filings(req: GetFilingsRequest) -> List[Dict[str, Any]]:
             filings = company.get_filings()
 
         results = []
-        # Apply limit after fetching
-        for filing in list(filings)[: req.limit]:
+        for i, filing in enumerate(filings):
+            if i >= req.limit:
+                break
             results.append(
                 {
                     "filing_date": filing.filing_date.strftime("%Y-%m-%d")
