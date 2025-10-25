@@ -14,10 +14,10 @@ from urllib.parse import urlparse
 import httpx
 import uvicorn
 from edgar import Company, Filing, set_identity, get_filings as edgar_get_filings
+from edgar.financials import Financials
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from rubric import Rubric
-
 
 T = TypeVar("T")
 
@@ -597,10 +597,6 @@ async def get_financials(req: FilingByAccessionRequest) -> Dict[str, Any]:
         }
 
         try:
-            # Import Financials from edgar
-            from edgar.financials import Financials
-
-            # Extract financials using Financials.extract
             financials = Financials.extract(filing)
 
             if financials:
@@ -762,7 +758,6 @@ async def evaluate(req: EvaluateRequest) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    # Configure logging
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
