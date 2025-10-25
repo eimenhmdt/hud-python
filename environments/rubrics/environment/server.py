@@ -143,16 +143,8 @@ class FilingByAccessionRequest(BaseModel):
 app = FastAPI(title="SEC EDGAR Environment API", version="0.1.0")
 
 
-# Set SEC EDGAR identity (required by SEC regulations)
-# Prefer EDGAR_IDENTITY per edgar docs; fallback to SEC_EDGAR_USER_AGENT for compatibility
-# Format: "Your Name your.email@domain.com"
-_identity = (
-    os.getenv("EDGAR_IDENTITY")
-    or os.getenv("SEC_EDGAR_USER_AGENT")
-    or "HUD Rubrics Environment hud-rubrics@example.com"
-)
-set_identity(_identity)
-logger.info(f"SEC EDGAR identity set to: {_identity}")
+# Require SEC EDGAR identity via EDGAR_IDENTITY (format: "Your Name your.email@domain.com")
+set_identity(os.environ["EDGAR_IDENTITY"])
 
 
 @app.get("/health")
@@ -327,7 +319,9 @@ async def get_filing_content(req: GetFilingContentRequest) -> Dict[str, str]:
         if not content:
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.get(req.filing_url, headers={"User-Agent": _identity})
+                    resp = await client.get(
+                        req.filing_url, headers={"User-Agent": os.environ["EDGAR_IDENTITY"]}
+                    )
                     resp.raise_for_status()
                     content = resp.text
             except Exception:
