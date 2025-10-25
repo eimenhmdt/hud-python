@@ -73,7 +73,23 @@ hud dev
 hud build
 ```
 
-Your `tasks.json` uses `docker run` to launch the environment:
+Your `tasks.json` uses `docker run` to launch the environment. Create a `.env` file in this directory with required variables:
+
+```bash
+cat > .env << 'EOF'
+# Required by SEC regulations (identify yourself)
+SEC_EDGAR_USER_AGENT="Your Name your@email"
+
+# Optional (enables HUD telemetry/tracing)
+HUD_API_KEY="your-hud-api-key"
+
+# Optional (model keys if your agent needs them)
+ANTHROPIC_API_KEY="your-anthropic-key"
+OPENAI_API_KEY="your-openai-key"
+EOF
+```
+
+Then the `mcp_config` runs the image with the env file:
 
 ```json
 {
@@ -81,7 +97,7 @@ Your `tasks.json` uses `docker run` to launch the environment:
   "mcp_config": {
     "local": {
       "command": "docker",
-      "args": ["run", "--rm", "-i", "-e", "SEC_EDGAR_USER_AGENT=your.name@example.com", "rubrics:latest"]
+      "args": ["run", "--rm", "-i", "--env-file", ".env", "rubrics:latest"]
     }
   },
   "evaluate_tool": {
