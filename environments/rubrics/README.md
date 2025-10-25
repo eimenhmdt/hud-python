@@ -37,11 +37,26 @@ The `evaluate` tool uses The LLM Data Company's [rubric](https://github.com/The-
 - **Important**: You must provide your identity (email) as required by SEC regulations.
 
 ### Environment Variables
-```bash
-export SEC_EDGAR_USER_AGENT="your.name@example.com"
-```
 
-**Note**: The SEC requires you to identify yourself when accessing EDGAR data. Use your email address or a descriptive identifier. This is set via the `SEC_EDGAR_USER_AGENT` environment variable.
+The environment requires several API keys and configuration:
+
+**Required:**
+- `EDGAR_IDENTITY` - Your identity for SEC EDGAR access (required by SEC regulations)
+  - Format: `"Your Name your.email@example.com"`
+
+**Optional:**
+- `HUD_API_KEY` - For HUD telemetry and tracing
+- `ANTHROPIC_API_KEY` - For Claude agent (if using Claude)
+- `OPENAI_API_KEY` - For rubric evaluation (if using OpenAI-based autograders)
+
+Set these before running `hud eval`:
+```bash
+export EDGAR_IDENTITY="Your Name your.email@example.com"
+export ANTHROPIC_API_KEY="your-anthropic-key"
+export OPENAI_API_KEY="your-openai-key"
+# Optional
+export HUD_API_KEY="your-hud-key"
+```
 
 ## Development
 
@@ -73,58 +88,19 @@ hud dev
 hud build
 ```
 
-Your `tasks.json` uses `docker run` to launch the environment. Create a `.env` file in this directory with required variables:
+Your `tasks.json` uses `docker run` to launch the environment. Export environment variables before running:
 
-```bash
-cat > .env << 'EOF'
-# Required by SEC regulations (identify yourself)
-SEC_EDGAR_USER_AGENT="Your Name your@email"
-
-# Optional (enables HUD telemetry/tracing)
-HUD_API_KEY="your-hud-api-key"
-
-# Optional (model keys if your agent needs them)
-ANTHROPIC_API_KEY="your-anthropic-key"
-OPENAI_API_KEY="your-openai-key"
-EOF
-```
-
-Then the `mcp_config` runs the image with the env file:
-
-```json
-{
-  "prompt": "Analyze Tesla's FY2024 10-K filing and identify key financial metrics",
-  "mcp_config": {
-    "local": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "--env-file", ".env", "rubrics:latest"]
-    }
-  },
-  "evaluate_tool": {
-    "name": "evaluate",
-    "arguments": {
-      "rubric": [
-        {
-          "requirement": "Correctly identifies Tesla's total revenue for FY2024",
-          "weight": 5
-        },
-        {
-          "requirement": "Provides specific revenue breakdown by segment",
-          "weight": 10
-        }
-      ]
-    }
-  }
-}
-```
-
-**Commands:**
 ```bash
 # Build first
+cd environments/rubrics
 hud build
 
-# Test task locally (set your SEC EDGAR identity)
-export SEC_EDGAR_USER_AGENT="your.name@example.com"
+# Export required environment variables
+export EDGAR_IDENTITY="Your Name your.email@example.com"
+export ANTHROPIC_API_KEY="your-anthropic-key"
+export OPENAI_API_KEY="your-openai-key"
+
+# Test task locally (hud eval will pass env vars to Docker)
 hud eval tasks.json
 
 # Push environment for remote running
