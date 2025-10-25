@@ -52,7 +52,7 @@ The environment requires several API keys and configuration:
 Set these before running `hud eval`:
 ```bash
 export EDGAR_IDENTITY="Your Name your.email@example.com"
-export ANTHROPIC_API_KEY="your-anthropic-key"
+export ANTHROPIC_API_KEY="your-anthropic-key" # only if using an Anthropic model
 export OPENAI_API_KEY="your-openai-key"
 # Optional
 export HUD_API_KEY="your-hud-key"
@@ -84,23 +84,41 @@ hud dev
 ## Tasks & Evaluation
 
 ```bash
-# Build first in the global folder with the Dockerfile (creates rubrics:0.1.0)
+# Build first in the global folder with the Dockerfile (creates rubrics:latest)
 hud build
 ```
 
-Your `tasks.json` uses `docker run` to launch the environment. Export environment variables before running:
+Your `tasks.json` uses `docker run` to launch the environment:
 
+```json
+{
+  "prompt": "Analyze Tesla's FY2024 10-K filing...",
+  "mcp_config": {
+    "local": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "rubrics:latest"]
+    }
+  },
+  "evaluate_tool": {
+    "name": "evaluate",
+    "arguments": {
+      "rubric": [...]
+    }
+  }
+}
+```
+
+**Note:** Export environment variables before running. The Docker container will inherit them from your shell.
+
+**Commands:**
 ```bash
 # Build first
-cd environments/rubrics
 hud build
 
-# Export required environment variables
+# Test task locally
 export EDGAR_IDENTITY="Your Name your.email@example.com"
 export ANTHROPIC_API_KEY="your-anthropic-key"
 export OPENAI_API_KEY="your-openai-key"
-
-# Test task locally (hud eval will pass env vars to Docker)
 hud eval tasks.json
 
 # Push environment for remote running
