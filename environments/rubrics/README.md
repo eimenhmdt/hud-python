@@ -120,6 +120,8 @@ export EDGAR_IDENTITY="Your Name your.email@example.com"
 export ANTHROPIC_API_KEY="your-anthropic-key"
 export OPENAI_API_KEY="your-openai-key"
 hud eval tasks.json
+# add the following flag to increase number of steps the agent can take (default is 10)
+--max-steps 25
 
 # Push environment for remote running
 hud push
